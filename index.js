@@ -26,6 +26,16 @@ const userSchema = new mongoose.Schema({
 
 const User = mongoose.model('User', userSchema);
 
+// Consumable Schema (per user)
+const consumableSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  name: { type: String, required: true },
+  defaultPrice: { type: Number, default: 0 },
+  createdAt: { type: Date, default: Date.now }
+});
+
+const Consumable = mongoose.model('Consumable', consumableSchema);
+
 // Pour Schema
 const pourSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
@@ -37,7 +47,18 @@ const pourSchema = new mongoose.Schema({
   equipment_cost: { type: Number, required: true },
   fuel_cost: { type: Number, required: true },
   repairs_cost: { type: Number, required: true },
+  // Backward-compat: keep aggregated numeric field
   consumables_cost: { type: Number, required: true },
+  // New: line items for consumables on this pour
+  consumable_items: {
+    type: [
+      {
+        name: { type: String, required: true },
+        price: { type: Number, required: true }
+      }
+    ],
+    default: []
+  },
   lunch_cost: { type: Number, required: true },
   misc_cost: { type: Number, required: true },
   createdAt: { type: Date, default: Date.now }
@@ -150,6 +171,7 @@ app.get('/api/pours', authenticateToken, async (req, res) => {
       fuel_cost: pour.fuel_cost,
       repairs_cost: pour.repairs_cost,
       consumables_cost: pour.consumables_cost,
+      consumable_items: pour.consumable_items || [],
       lunch_cost: pour.lunch_cost,
       misc_cost: pour.misc_cost,
       created_at: pour.createdAt
@@ -174,9 +196,15 @@ app.post('/api/pours', authenticateToken, async (req, res) => {
       fuel_cost,
       repairs_cost,
       consumables_cost,
+      consumable_items = [],
       lunch_cost,
       misc_cost
     } = req.body;
+    // If line items are provided, calculate aggregate to ensure consistency
+    let computedConsumables = consumables_cost;
+    if (Array.isArray(consumable_items) && consumable_items.length > 0) {
+      computedConsumables = consumable_items.reduce((sum, item) => sum + (Number(item.price) || 0), 0);
+    }
 
     const pour = new Pour({
       userId: req.user.userId,
@@ -188,7 +216,8 @@ app.post('/api/pours', authenticateToken, async (req, res) => {
       equipment_cost,
       fuel_cost,
       repairs_cost,
-      consumables_cost,
+      consumables_cost: Number(computedConsumables) || 0,
+      consumable_items,
       lunch_cost,
       misc_cost
     });
@@ -208,6 +237,7 @@ app.post('/api/pours', authenticateToken, async (req, res) => {
       fuel_cost: pour.fuel_cost,
       repairs_cost: pour.repairs_cost,
       consumables_cost: pour.consumables_cost,
+      consumable_items: pour.consumable_items || [],
       lunch_cost: pour.lunch_cost,
       misc_cost: pour.misc_cost,
       created_at: pour.createdAt
@@ -234,6 +264,58 @@ app.delete('/api/pours/:id', authenticateToken, async (req, res) => {
     res.json({ message: 'Pour deleted successfully' });
   } catch (error) {
     console.error('Delete pour error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Consumables routes (per user)
+app.get('/api/consumables', authenticateToken, async (req, res) => {
+  try {
+    const items = await Consumable.find({ userId: req.user.userId }).sort({ name: 1 });
+    const mapped = items.map(i => ({ id: i._id.toString(), name: i.name, defaultPrice: i.defaultPrice }));
+    res.json(mapped);
+  } catch (error) {
+    console.error('Get consumables error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.post('/api/consumables', authenticateToken, async (req, res) => {
+  try {
+    const { name, defaultPrice = 0 } = req.body;
+    if (!name || typeof name !== 'string') {
+      return res.status(400).json({ error: 'Name is required' });
+    }
+    const created = await new Consumable({ userId: req.user.userId, name: name.trim(), defaultPrice: Number(defaultPrice) || 0 }).save();
+    res.json({ id: created._id.toString(), name: created.name, defaultPrice: created.defaultPrice });
+  } catch (error) {
+    console.error('Create consumable error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.put('/api/consumables/:id', authenticateToken, async (req, res) => {
+  try {
+    const { name, defaultPrice } = req.body;
+    const update = {};
+    if (name !== undefined) update.name = String(name).trim();
+    if (defaultPrice !== undefined) update.defaultPrice = Number(defaultPrice) || 0;
+    const updated = await Consumable.findOneAndUpdate({ _id: req.params.id, userId: req.user.userId }, update, { new: true });
+    if (!updated) return res.status(404).json({ error: 'Consumable not found' });
+    res.json({ id: updated._id.toString(), name: updated.name, defaultPrice: updated.defaultPrice });
+  } catch (error) {
+    console.error('Update consumable error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.delete('/api/consumables/:id', authenticateToken, async (req, res) => {
+  try {
+    const result = await Consumable.findOneAndDelete({ _id: req.params.id, userId: req.user.userId });
+    if (!result) return res.status(404).json({ error: 'Consumable not found' });
+    res.json({ message: 'Deleted' });
+  } catch (error) {
+    console.error('Delete consumable error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
