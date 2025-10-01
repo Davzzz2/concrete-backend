@@ -255,6 +255,84 @@ app.post('/api/pours', authenticateToken, async (req, res) => {
   }
 });
 
+// Update a pour
+app.put('/api/pours/:id', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      pour_id,
+      date,
+      area,
+      price_per_sqft,
+      labor_cost,
+      equipment_cost,
+      fuel_cost,
+      repairs_cost,
+      consumables_cost,
+      consumable_items = [],
+      lunch_cost,
+      misc_cost
+    } = req.body;
+
+    // If line items are provided, calculate aggregate to ensure consistency
+    let computedConsumables = consumables_cost;
+    if (Array.isArray(consumable_items) && consumable_items.length > 0) {
+      computedConsumables = consumable_items.reduce((sum, item) => {
+        const price = Number(item.price) || 0;
+        const quantity = Number(item.quantity) || 1;
+        return sum + (price * quantity);
+      }, 0);
+    }
+
+    const pour = await Pour.findOneAndUpdate(
+      { _id: id, userId: req.user.userId },
+      {
+        pour_id,
+        date,
+        area,
+        price_per_sqft,
+        labor_cost,
+        equipment_cost,
+        fuel_cost,
+        repairs_cost,
+        consumables_cost: Number(computedConsumables) || 0,
+        consumable_items,
+        lunch_cost,
+        misc_cost
+      },
+      { new: true }
+    );
+
+    if (!pour) {
+      return res.status(404).json({ error: 'Pour not found' });
+    }
+
+    // Return in the expected format
+    const updatedPour = {
+      id: pour._id.toString(),
+      user_id: pour.userId.toString(),
+      pour_id: pour.pour_id,
+      date: pour.date,
+      area: pour.area,
+      price_per_sqft: pour.price_per_sqft,
+      labor_cost: pour.labor_cost,
+      equipment_cost: pour.equipment_cost,
+      fuel_cost: pour.fuel_cost,
+      repairs_cost: pour.repairs_cost,
+      consumables_cost: pour.consumables_cost,
+      consumable_items: pour.consumable_items || [],
+      lunch_cost: pour.lunch_cost,
+      misc_cost: pour.misc_cost,
+      created_at: pour.createdAt
+    };
+
+    res.json(updatedPour);
+  } catch (error) {
+    console.error('Update pour error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 app.delete('/api/pours/:id', authenticateToken, async (req, res) => {
   try {
     const result = await Pour.findOneAndDelete({
